@@ -1,14 +1,17 @@
 // State
 let currentMarkdown = null;
+let currentTitle = null;
 
 // DOM Elements
 const copyBtn = document.getElementById('copyBtn');
+const downloadBtn = document.getElementById('downloadBtn');
 const includeImagesCheckbox = document.getElementById('includeImages');
 const preview = document.getElementById('preview');
 const status = document.getElementById('status');
 
 // Event Listeners
 copyBtn.addEventListener('click', copyMarkdown);
+downloadBtn.addEventListener('click', downloadMarkdown);
 includeImagesCheckbox.addEventListener('change', createMarkdown);
 
 // Auto-trigger create when extension opens
@@ -35,10 +38,12 @@ function isRestrictedUrl(url) {
 }
 
 /**
- * Set copy button disabled state
+ * Set action buttons disabled state
  */
-function setCopyDisabled(disabled) {
-  copyBtn.disabled = disabled || !currentMarkdown;
+function setActionsDisabled(disabled) {
+  const isDisabled = disabled || !currentMarkdown;
+  copyBtn.disabled = isDisabled;
+  downloadBtn.disabled = isDisabled;
 }
 
 /**
@@ -77,7 +82,7 @@ function displayLoading() {
  * Main function to create markdown from current tab
  */
 async function createMarkdown() {
-  setCopyDisabled(true);
+  setActionsDisabled(true);
   setStatus('Processing...', 'loading');
   displayLoading();
   
@@ -124,16 +129,18 @@ async function createMarkdown() {
     
     // Success - store and display markdown
     currentMarkdown = result.markdown;
+    currentTitle = result.title;
     displayMarkdown(currentMarkdown);
     setStatus('Generated successfully', 'success');
-    copyBtn.disabled = false;
+    setActionsDisabled(false);
     
   } catch (error) {
     console.error('Error creating markdown:', error);
     currentMarkdown = null;
+    currentTitle = null;
     displayError(error.message);
     setStatus(error.message, 'error');
-    copyBtn.disabled = true;
+    setActionsDisabled(true);
   }
 }
 
@@ -152,16 +159,65 @@ async function copyMarkdown() {
     
     // Visual feedback on copy button
     copyBtn.classList.add('copied');
-    copyBtn.textContent = 'Copied!';
+    copyBtn.querySelector('.btn-text').textContent = 'Copied!';
     
     setTimeout(() => {
       copyBtn.classList.remove('copied');
-      copyBtn.textContent = 'Copy';
+      copyBtn.querySelector('.btn-text').textContent = 'Copy';
     }, 1500);
     
   } catch (error) {
     console.error('Error copying to clipboard:', error);
     setStatus('Failed to copy: ' + error.message, 'error');
+  }
+}
+
+/**
+ * Download markdown as .md file
+ */
+function downloadMarkdown() {
+  if (!currentMarkdown) {
+    setStatus('No content to download', 'error');
+    return;
+  }
+  
+  try {
+    // Create filename from title, sanitizing invalid characters
+    const sanitizedTitle = (currentTitle || 'content')
+      .replace(/[<>:"/\\|?*]/g, '-')  // Replace invalid filename chars
+      .replace(/\s+/g, '-')           // Replace spaces with hyphens
+      .replace(/-+/g, '-')            // Collapse multiple hyphens
+      .replace(/^-|-$/g, '')          // Remove leading/trailing hyphens
+      .substring(0, 100);             // Limit length
+    
+    const filename = `${sanitizedTitle}.md`;
+    
+    // Create blob and download
+    const blob = new Blob([currentMarkdown], { type: 'text/markdown;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    
+    setStatus('Downloaded!', 'success');
+    
+    // Visual feedback on download button
+    downloadBtn.classList.add('copied');
+    downloadBtn.querySelector('.btn-text').textContent = 'Done!';
+    
+    setTimeout(() => {
+      downloadBtn.classList.remove('copied');
+      downloadBtn.querySelector('.btn-text').textContent = 'Download';
+    }, 1500);
+    
+  } catch (error) {
+    console.error('Error downloading file:', error);
+    setStatus('Failed to download: ' + error.message, 'error');
   }
 }
 
