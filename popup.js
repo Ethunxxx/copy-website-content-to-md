@@ -217,20 +217,23 @@ function extractPageContent(options) {
   }
   
   function buildMetadataHeader(meta) {
+    // Use plain text format without blockquotes for better Notion compatibility
+    // Notion treats > as callouts which don't render multi-line content well
+    // Use double newlines to ensure proper line breaks in Notion
     const lines = [
-      `> **Source:** ${meta.url}`,
-      `> **Extracted:** ${meta.dateStr}`,
-      `> **Site:** ${meta.siteName}`
+      `**Source:** ${meta.url}`,
+      `**Extracted:** ${meta.dateStr}`,
+      `**Site:** ${meta.siteName}`
     ];
     
     if (meta.authorName) {
-      lines.push(`> **Author:** ${meta.authorName}`);
+      lines.push(`**Author:** ${meta.authorName}`);
     }
     if (meta.section) {
-      lines.push(`> **Section:** ${meta.section}`);
+      lines.push(`**Section:** ${meta.section}`);
     }
     
-    return lines.join('\n') + '\n';
+    return lines.join('\n\n') + '\n';
   }
   
   function getMainContent() {
@@ -255,10 +258,52 @@ function extractPageContent(options) {
     return document.body;
   }
   
+  /**
+   * Preprocess HTML to normalize strong/b tags before Turndown conversion
+   * This fixes issues with malformed bold tags that span block elements
+   */
+  function preprocessHtml(html) {
+    const doc = new DOMParser().parseFromString(html, 'text/html');
+    
+    // Find all strong/b elements and normalize them
+    doc.querySelectorAll('strong, b').forEach(el => {
+      // Remove empty or whitespace-only strong tags
+      if (!el.textContent.trim()) {
+        el.replaceWith(...el.childNodes);
+        return;
+      }
+      
+      // If strong contains block elements, unwrap it to prevent broken markdown
+      const hasBlockChild = el.querySelector('p, div, ul, ol, li, br, h1, h2, h3, h4, h5, h6');
+      if (hasBlockChild) {
+        el.replaceWith(...el.childNodes);
+        return;
+      }
+      
+      // Trim whitespace from text nodes at start and end of strong element
+      const firstChild = el.firstChild;
+      const lastChild = el.lastChild;
+      
+      if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
+        firstChild.textContent = firstChild.textContent.replace(/^\s+/, '');
+      }
+      if (lastChild && lastChild.nodeType === Node.TEXT_NODE) {
+        lastChild.textContent = lastChild.textContent.replace(/\s+$/, '');
+      }
+      
+      // If after trimming, element is empty, remove it
+      if (!el.textContent.trim()) {
+        el.replaceWith(...el.childNodes);
+      }
+    });
+    
+    return doc.body.innerHTML;
+  }
+  
   try {
     const title = document.title || 'Untitled Page';
     const contentElement = getMainContent();
-    const html = contentElement.innerHTML;
+    const html = preprocessHtml(contentElement.innerHTML);
     
     const metadata = extractMetadata(title);
     
@@ -293,6 +338,21 @@ function extractPageContent(options) {
       replacement: () => ''
     });
     
+    // Custom rule for strong/bold to handle whitespace properly
+    turndownService.addRule('strong', {
+      filter: ['strong', 'b'],
+      replacement: function(content, node, options) {
+        // Trim and normalize whitespace
+        content = content.trim();
+        if (!content) return '';
+        
+        // Don't bold if content is just punctuation or whitespace
+        if (/^[\s.,;:!?\-]+$/.test(content)) return content;
+        
+        return '**' + content + '**';
+      }
+    });
+    
     // Use 4-space indentation for nested lists (universal compatibility with Notion, GitHub, etc.)
     turndownService.addRule('listItem', {
       filter: 'li',
@@ -323,7 +383,21 @@ function extractPageContent(options) {
     markdown = `# ${metadata.title}\n\n${header}\n---\n\n${markdown}`;
     
     markdown = markdown
+      // Remove empty bold markers (including those with just whitespace)
+      .replace(/\*\*\s*\*\*/g, '')
+      // Fix double-double asterisks from adjacent strong tags: **** → single space
+      .replace(/\*\*\*\*/g, ' ')
+      // Remove standalone ** on their own line
+      .replace(/^\*\*\s*$/gm, '')
+      // Add line break before bold section headers that follow periods/links
+      // Pattern: text ending with . or ) followed by **BoldText (likely a section header)
+      .replace(/([.)\]])\s*(\*\*[A-ZÄÖÜ])/g, '$1\n\n$2')
+      // Fix missing space/line break when period is immediately followed by capital letter (no space)
+      // This indicates text running together that should be separate sections
+      .replace(/\.([A-ZÄÖÜ][a-zäöüß])/g, '.\n\n$1')
+      // Clean up excessive newlines
       .replace(/\n{3,}/g, '\n\n')
+      // Remove trailing whitespace on lines
       .replace(/[ \t]+$/gm, '')
       .trim();
     
