@@ -9,6 +9,7 @@ const status = document.getElementById('status');
 
 // Event Listeners
 copyBtn.addEventListener('click', copyMarkdown);
+includeImagesCheckbox.addEventListener('change', createMarkdown);
 
 // Auto-trigger create when extension opens
 document.addEventListener('DOMContentLoaded', () => createMarkdown());
@@ -225,7 +226,22 @@ function extractPageContent(options) {
   }
   
   function getMainContent() {
-    const selectors = [
+    // Site-specific selectors (most specific first)
+    const siteSpecificSelectors = {
+      'substack.com': [
+        '.body.markup',           // Substack article body
+        '.post-content',          // Alternative Substack selector
+        'article .body',
+        'article'
+      ],
+      'medium.com': [
+        'article section',
+        'article'
+      ]
+    };
+    
+    // Generic selectors
+    const genericSelectors = [
       'article',
       '[role="main"]',
       'main',
@@ -239,24 +255,97 @@ function extractPageContent(options) {
       '.scaffold-layout__main'   // LinkedIn main area
     ];
     
+    // Check for site-specific selectors first
+    const hostname = window.location.hostname;
+    for (const [site, selectors] of Object.entries(siteSpecificSelectors)) {
+      if (hostname.includes(site)) {
+        for (const selector of selectors) {
+          const element = document.querySelector(selector);
+          if (element && element.textContent.trim().length > 100) {
+            return cleanContentElement(element.cloneNode(true));
+          }
+        }
+      }
+    }
+    
     const bodyTextLength = document.body.textContent.trim().length;
     const MIN_CONTENT_RATIO = 0.3;  // Candidate must have at least 30% of body text
     
-    for (const selector of selectors) {
+    for (const selector of genericSelectors) {
       const element = document.querySelector(selector);
       if (element && element.textContent.trim().length > 100) {
         const elementTextLength = element.textContent.trim().length;
         
         // If candidate has reasonable portion of body content, use it
         if (elementTextLength >= bodyTextLength * MIN_CONTENT_RATIO) {
-          return element;
+          return cleanContentElement(element.cloneNode(true));
         }
         // Otherwise continue checking other selectors
       }
     }
     
     // Fall back to body if no suitable element found
-    return document.body;
+    return cleanContentElement(document.body.cloneNode(true));
+  }
+  
+  /**
+   * Remove unwanted elements from content before conversion
+   * Conservative approach: only remove elements we're confident are UI cruft
+   */
+  function cleanContentElement(element) {
+    const hostname = window.location.hostname;
+    
+    // Site-specific selectors - only apply to known sites
+    const siteSpecificRemovals = {
+      'substack.com': [
+        '.subscribe-widget',
+        '.subscription-widget', 
+        '.subscribe-prompt',
+        '.post-ufi',                    // Likes/shares row
+        '.like-button-container',
+        '.share-dialog',
+        '.restack-button',
+        '.frontend-components-notification',
+        '.paywall',
+        '.guest-post-subscribe-section',
+        '.recommendations',
+        '.recommendations-container'
+      ],
+      'medium.com': [
+        '[data-testid="audioPlayButton"]',
+        '[data-testid="headerSocialShareButton"]'
+      ]
+    };
+    
+    // Apply site-specific removals
+    for (const [site, selectors] of Object.entries(siteSpecificRemovals)) {
+      if (hostname.includes(site)) {
+        for (const selector of selectors) {
+          try {
+            element.querySelectorAll(selector).forEach(el => el.remove());
+          } catch (e) {
+            // Ignore invalid selectors
+          }
+        }
+      }
+    }
+    
+    // Very conservative generic removals - only things that are clearly not content
+    // These use exact class names, not substring matches
+    const safeGenericRemovals = [
+      'nav',
+      '[role="navigation"]'
+    ];
+    
+    for (const selector of safeGenericRemovals) {
+      try {
+        element.querySelectorAll(selector).forEach(el => el.remove());
+      } catch (e) {
+        // Ignore invalid selectors
+      }
+    }
+    
+    return element;
   }
   
   /**
@@ -339,6 +428,15 @@ function extractPageContent(options) {
       replacement: () => ''
     });
     
+    // Remove empty links (links with no text content)
+    // Safe: empty links are never meaningful content
+    turndownService.addRule('removeEmptyLinks', {
+      filter: function(node) {
+        return node.nodeName === 'A' && !node.textContent.trim();
+      },
+      replacement: () => ''
+    });
+    
     // Custom rule for strong/bold to handle whitespace properly
     turndownService.addRule('strong', {
       filter: ['strong', 'b'],
@@ -351,6 +449,44 @@ function extractPageContent(options) {
         if (/^[\s.,;:!?\-]+$/.test(content)) return content;
         
         return '**' + content + '**';
+      }
+    });
+    
+    // Custom rule for images to handle CDN URLs properly
+    turndownService.addRule('images', {
+      filter: 'img',
+      replacement: function(content, node) {
+        let src = node.getAttribute('src') || '';
+        const alt = node.getAttribute('alt') || '';
+        
+        // Skip if no src or if images are disabled
+        if (!src || !options.includeImages) return '';
+        
+        // Fix Substack CDN URLs - extract the actual image URL
+        // Substack uses format: https://substackcdn.com/image/fetch/...params.../https%3A%2F%2F...
+        const substackMatch = src.match(/substackcdn\.com\/image\/fetch\/[^/]+\/+(https?%3A%2F%2F[^\s]+)/i);
+        if (substackMatch) {
+          try {
+            src = decodeURIComponent(substackMatch[1]);
+          } catch (e) {
+            // If decode fails, try to use as-is
+          }
+        }
+        
+        // Also handle other CDN URL patterns that encode the source URL
+        const encodedUrlMatch = src.match(/\/(https?%3A%2F%2F[^\s?]+)/i);
+        if (!substackMatch && encodedUrlMatch) {
+          try {
+            src = decodeURIComponent(encodedUrlMatch[1]);
+          } catch (e) {
+            // Keep original if decode fails
+          }
+        }
+        
+        // Clean up any remaining URL issues
+        src = src.replace(/\s+/g, '%20');
+        
+        return alt ? `![${alt}](${src})` : `![](${src})`;
       }
     });
     
@@ -396,6 +532,17 @@ function extractPageContent(options) {
       // Fix missing space/line break when period is immediately followed by capital letter (no space)
       // This indicates text running together that should be separate sections
       .replace(/\.([A-ZÄÖÜ][a-zäöüß])/g, '.\n\n$1')
+      
+      // Remove specific concatenated UI text patterns (exact matches only)
+      .replace(/SubscribeSign in/g, '')
+      .replace(/Sign inSubscribe/g, '')
+      
+      // Remove empty link references like [](/path) - these are never content
+      .replace(/\[\s*\]\([^)]*\)/g, '')
+      
+      // Remove duplicate horizontal rules
+      .replace(/(\n---\n)+/g, '\n---\n')
+      
       // Clean up excessive newlines
       .replace(/\n{3,}/g, '\n\n')
       // Remove trailing whitespace on lines
