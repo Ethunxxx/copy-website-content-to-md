@@ -233,16 +233,29 @@ function extractPageContent(options) {
       '.article-content',
       '.entry-content',
       '.content',
-      '#content'
+      '#content',
+      '[role="article"]',
+      '.feed-shared-update-v2',  // LinkedIn posts
+      '.scaffold-layout__main'   // LinkedIn main area
     ];
+    
+    const bodyTextLength = document.body.textContent.trim().length;
+    const MIN_CONTENT_RATIO = 0.3;  // Candidate must have at least 30% of body text
     
     for (const selector of selectors) {
       const element = document.querySelector(selector);
       if (element && element.textContent.trim().length > 100) {
-        return element;
+        const elementTextLength = element.textContent.trim().length;
+        
+        // If candidate has reasonable portion of body content, use it
+        if (elementTextLength >= bodyTextLength * MIN_CONTENT_RATIO) {
+          return element;
+        }
+        // Otherwise continue checking other selectors
       }
     }
     
+    // Fall back to body if no suitable element found
     return document.body;
   }
   
