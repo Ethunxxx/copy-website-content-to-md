@@ -1,6 +1,8 @@
 # Web Content to MD
 
-A Chrome extension that converts web page content to clean Markdown format with metadata headers. Typical use cases could be providing the website content as context for an LLM or copying the content to other tools (Google Docs, Notion etc.).
+This is a Chrome extension that converts web page content to clean Markdown format with metadata headers. Typical use cases could be providing the website content as context for an LLM or copying the content to other tools (Google Docs, Notion etc.).
+
+I created this extension for my own use with the help of AI coding agents. Feel free to use the code however you like!
 
 ## Features
 
