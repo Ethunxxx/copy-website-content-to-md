@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <!-- Globe -->
+  <circle cx="40" cy="64" r="28" fill="none" stroke="#4A90D9" stroke-width="4"/>
+  <ellipse cx="40" cy="64" rx="28" ry="12" fill="none" stroke="#4A90D9" stroke-width="2"/>
+  <line x1="40" y1="36" x2="40" y2="92" stroke="#4A90D9" stroke-width="2"/>
+  <path d="M12 64 Q40 50 68 64" fill="none" stroke="#4A90D9" stroke-width="2"/>
+  <path d="M12 64 Q40 78 68 64" fill="none" stroke="#4A90D9" stroke-width="2"/>
+  
+  <!-- Arrow -->
+  <path d="M72 64 L82 64 M78 58 L84 64 L78 70" fill="none" stroke="#666" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  
+  <!-- MD Badge -->
+  <rect x="88" y="48" width="36" height="32" rx="4" fill="#4A90D9"/>
+  <text x="106" y="70" font-family="Arial, sans-serif" font-size="14" font-weight="bold" fill="white" text-anchor="middle">MD</text>
+</svg>
