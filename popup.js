@@ -293,6 +293,30 @@ function extractPageContent(options) {
       replacement: () => ''
     });
     
+    // Use 4-space indentation for nested lists (universal compatibility with Notion, GitHub, etc.)
+    turndownService.addRule('listItem', {
+      filter: 'li',
+      replacement: function(content, node, options) {
+        content = content
+          .replace(/^\n+/, '')
+          .replace(/\n+$/, '\n')
+          .replace(/\n/gm, '\n    '); // 4 spaces for nested content
+        
+        let prefix = options.bulletListMarker + ' ';
+        const parent = node.parentNode;
+        if (parent.nodeName === 'OL') {
+          const start = parent.getAttribute('start');
+          const index = Array.from(parent.children)
+            .filter(el => el.nodeName === 'LI')
+            .indexOf(node);
+          const number = (start ? parseInt(start, 10) : 1) + index;
+          prefix = number + '. ';
+        }
+        
+        return prefix + content + (node.nextSibling && !/\n$/.test(content) ? '\n' : '');
+      }
+    });
+    
     let markdown = turndownService.turndown(html);
     
     const header = buildMetadataHeader(metadata);
