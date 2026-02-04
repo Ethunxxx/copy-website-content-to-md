@@ -111,6 +111,12 @@ body {
   gap: 8px;
 }
 
+.checkbox-group {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
 .checkbox-label {
   display: inline-flex;
   align-items: center;

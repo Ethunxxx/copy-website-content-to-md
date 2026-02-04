@@ -1,11 +1,13 @@
 // State
 let currentMarkdown = null;
+let currentHtml = null;
 let currentTitle = null;
 
 // DOM Elements
 const copyBtn = document.getElementById('copyBtn');
 const downloadBtn = document.getElementById('downloadBtn');
 const includeImagesCheckbox = document.getElementById('includeImages');
+const includeHtmlCheckbox = document.getElementById('includeHtml');
 const preview = document.getElementById('preview');
 const status = document.getElementById('status');
 
@@ -13,6 +15,7 @@ const status = document.getElementById('status');
 copyBtn.addEventListener('click', copyMarkdown);
 downloadBtn.addEventListener('click', downloadMarkdown);
 includeImagesCheckbox.addEventListener('change', createMarkdown);
+includeHtmlCheckbox.addEventListener('change', updatePreview);
 
 // Auto-trigger create when extension opens
 document.addEventListener('DOMContentLoaded', () => createMarkdown());
@@ -55,11 +58,20 @@ function setStatus(message, type = '') {
 }
 
 /**
- * Display markdown in preview area
+ * Display content in preview area based on current options
  */
 function displayMarkdown(markdown) {
-  preview.textContent = markdown;
+  preview.textContent = buildCopyContent() || markdown;
   preview.className = 'preview';
+}
+
+/**
+ * Update preview when options change (without re-extracting content)
+ */
+function updatePreview() {
+  if (currentMarkdown) {
+    preview.textContent = buildCopyContent();
+  }
 }
 
 /**
@@ -127,8 +139,9 @@ async function createMarkdown() {
       throw new Error(result.error || 'Content extraction failed');
     }
     
-    // Success - store and display markdown
+    // Success - store markdown and HTML
     currentMarkdown = result.markdown;
+    currentHtml = result.html;
     currentTitle = result.title;
     displayMarkdown(currentMarkdown);
     setStatus('Generated successfully', 'success');
@@ -137,11 +150,34 @@ async function createMarkdown() {
   } catch (error) {
     console.error('Error creating markdown:', error);
     currentMarkdown = null;
+    currentHtml = null;
     currentTitle = null;
     displayError(error.message);
     setStatus(error.message, 'error');
     setActionsDisabled(true);
   }
+}
+
+/**
+ * Build the content to copy based on options
+ */
+function buildCopyContent() {
+  if (!currentMarkdown) return null;
+  
+  if (includeHtmlCheckbox.checked && currentHtml) {
+    // Include both MD and HTML with start/end flags
+    return [
+      '<!-- MARKDOWN START -->',
+      currentMarkdown,
+      '<!-- MARKDOWN END -->',
+      '',
+      '<!-- HTML START -->',
+      currentHtml,
+      '<!-- HTML END -->'
+    ].join('\n');
+  }
+  
+  return currentMarkdown;
 }
 
 /**
@@ -154,7 +190,8 @@ async function copyMarkdown() {
   }
   
   try {
-    await navigator.clipboard.writeText(currentMarkdown);
+    const contentToCopy = buildCopyContent();
+    await navigator.clipboard.writeText(contentToCopy);
     setStatus('Copied to clipboard!', 'success');
     
     // Visual feedback on copy button
@@ -173,7 +210,35 @@ async function copyMarkdown() {
 }
 
 /**
- * Download markdown as .md file
+ * Download a single file with given content, filename, and MIME type
+ */
+function downloadFile(content, filename, mimeType) {
+  const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
+  const url = URL.createObjectURL(blob);
+  
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+}
+
+/**
+ * Get sanitized filename base from title
+ */
+function getSanitizedFilename() {
+  return (currentTitle || 'content')
+    .replace(/[<>:"/\\|?*]/g, '-')  // Replace invalid filename chars
+    .replace(/\s+/g, '-')           // Replace spaces with hyphens
+    .replace(/-+/g, '-')            // Collapse multiple hyphens
+    .replace(/^-|-$/g, '')          // Remove leading/trailing hyphens
+    .substring(0, 100);             // Limit length
+}
+
+/**
+ * Download markdown (and optionally HTML) as file(s)
  */
 function downloadMarkdown() {
   if (!currentMarkdown) {
@@ -182,29 +247,21 @@ function downloadMarkdown() {
   }
   
   try {
-    // Create filename from title, sanitizing invalid characters
-    const sanitizedTitle = (currentTitle || 'content')
-      .replace(/[<>:"/\\|?*]/g, '-')  // Replace invalid filename chars
-      .replace(/\s+/g, '-')           // Replace spaces with hyphens
-      .replace(/-+/g, '-')            // Collapse multiple hyphens
-      .replace(/^-|-$/g, '')          // Remove leading/trailing hyphens
-      .substring(0, 100);             // Limit length
+    const sanitizedTitle = getSanitizedFilename();
     
-    const filename = `${sanitizedTitle}.md`;
+    // Download markdown file
+    downloadFile(currentMarkdown, `${sanitizedTitle}.md`, 'text/markdown');
     
-    // Create blob and download
-    const blob = new Blob([currentMarkdown], { type: 'text/markdown;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = filename;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
-    
-    setStatus('Downloaded!', 'success');
+    // If HTML checkbox is checked and we have HTML, download it too
+    if (includeHtmlCheckbox.checked && currentHtml) {
+      // Small delay to avoid browser blocking multiple downloads
+      setTimeout(() => {
+        downloadFile(currentHtml, `${sanitizedTitle}.html`, 'text/html');
+      }, 100);
+      setStatus('Downloaded MD & HTML!', 'success');
+    } else {
+      setStatus('Downloaded!', 'success');
+    }
     
     // Visual feedback on download button
     downloadBtn.classList.add('copied');
@@ -608,6 +665,7 @@ function extractPageContent(options) {
     return { 
       success: true, 
       markdown, 
+      html,
       title: metadata.title,
       url: metadata.url
     };
