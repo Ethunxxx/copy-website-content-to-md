@@ -5,6 +5,7 @@ let currentMarkdown = null;
 const createBtn = document.getElementById('createBtn');
 const copyBtn = document.getElementById('copyBtn');
 const createCopyBtn = document.getElementById('createCopyBtn');
+const includeImagesCheckbox = document.getElementById('includeImages');
 const preview = document.getElementById('preview');
 const status = document.getElementById('status');
 
@@ -96,10 +97,22 @@ async function createMarkdown(copyAfter = false) {
       throw new Error('Cannot access this page. Chrome system pages, the Web Store, and local files are restricted.');
     }
     
-    // Inject and execute content script
+    // Get options
+    const options = {
+      includeImages: includeImagesCheckbox.checked
+    };
+    
+    // Inject Turndown library first
+    await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: ['lib/turndown.js']
+    });
+    
+    // Inject and execute content script with options
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ['lib/turndown.js', 'content.js']
+      func: extractPageContent,
+      args: [options]
     });
     
     const result = results[0]?.result;
@@ -160,5 +173,147 @@ async function copyMarkdown() {
   } catch (error) {
     console.error('Error copying to clipboard:', error);
     setStatus('Failed to copy: ' + error.message, 'error');
+  }
+}
+
+/**
+ * Content extraction function - injected into the page
+ * This function runs in the context of the target page
+ */
+function extractPageContent(options) {
+  'use strict';
+  
+  function extractMetadata(title) {
+    const url = window.location.href;
+    const now = new Date();
+    const dateStr = now.toISOString().slice(0, 10) + ' at ' + 
+                    now.toTimeString().slice(0, 5);
+    
+    const siteName = 
+      getMetaContent('og:site_name') ||
+      getMetaContent('application-name') ||
+      getMetaContent('publisher') ||
+      window.location.hostname.replace(/^www\./, '');
+    
+    const authorName =
+      getMetaContent('author') ||
+      getMetaContent('article:author') ||
+      getMetaContent('twitter:creator') ||
+      null;
+    
+    const section = 
+      getMetaContent('article:section') ||
+      getMetaContent('category') ||
+      null;
+    
+    return { title, url, dateStr, siteName, authorName, section };
+  }
+  
+  function getMetaContent(name) {
+    const meta = document.querySelector(
+      `meta[name="${name}"], meta[property="${name}"]`
+    );
+    return meta?.content?.trim() || null;
+  }
+  
+  function buildMetadataHeader(meta) {
+    const lines = [
+      `> **Source:** ${meta.url}`,
+      `> **Extracted:** ${meta.dateStr}`,
+      `> **Site:** ${meta.siteName}`
+    ];
+    
+    if (meta.authorName) {
+      lines.push(`> **Author:** ${meta.authorName}`);
+    }
+    if (meta.section) {
+      lines.push(`> **Section:** ${meta.section}`);
+    }
+    
+    return lines.join('\n') + '\n';
+  }
+  
+  function getMainContent() {
+    const selectors = [
+      'article',
+      '[role="main"]',
+      'main',
+      '.post-content',
+      '.article-content',
+      '.entry-content',
+      '.content',
+      '#content'
+    ];
+    
+    for (const selector of selectors) {
+      const element = document.querySelector(selector);
+      if (element && element.textContent.trim().length > 100) {
+        return element;
+      }
+    }
+    
+    return document.body;
+  }
+  
+  try {
+    const title = document.title || 'Untitled Page';
+    const contentElement = getMainContent();
+    const html = contentElement.innerHTML;
+    
+    const metadata = extractMetadata(title);
+    
+    const turndownService = new TurndownService({
+      headingStyle: 'atx',
+      hr: '---',
+      bulletListMarker: '-',
+      codeBlockStyle: 'fenced',
+      emDelimiter: '*',
+      strongDelimiter: '**',
+      linkStyle: 'inlined'
+    });
+    
+    // Filter out unwanted elements
+    const filterElements = ['script', 'style', 'noscript', 'iframe', 'nav', 'footer', 'aside', 'header'];
+    
+    // Add img to filter if not including images
+    if (!options.includeImages) {
+      filterElements.push('img');
+    }
+    
+    turndownService.addRule('removeUnwanted', {
+      filter: filterElements,
+      replacement: () => ''
+    });
+    
+    turndownService.addRule('removeHidden', {
+      filter: function(node) {
+        const style = node.style;
+        return style && (style.display === 'none' || style.visibility === 'hidden');
+      },
+      replacement: () => ''
+    });
+    
+    let markdown = turndownService.turndown(html);
+    
+    const header = buildMetadataHeader(metadata);
+    markdown = `# ${metadata.title}\n\n${header}\n---\n\n${markdown}`;
+    
+    markdown = markdown
+      .replace(/\n{3,}/g, '\n\n')
+      .replace(/[ \t]+$/gm, '')
+      .trim();
+    
+    return { 
+      success: true, 
+      markdown, 
+      title: metadata.title,
+      url: metadata.url
+    };
+    
+  } catch (error) {
+    return { 
+      success: false, 
+      error: error.message || 'Unknown error during extraction'
+    };
   }
 }

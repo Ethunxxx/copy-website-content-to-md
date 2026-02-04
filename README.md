@@ -8,6 +8,7 @@ A Chrome extension that converts web page content to clean Markdown format with 
 - **Copy to clipboard** - Copy the generated Markdown with one click
 - **Create & copy** - Generate and copy in one action
 - **Metadata headers** - Includes source URL, extraction date, site name, author, and section
+- **Image toggle** - Option to include or exclude images (excluded by default)
 
 ## Installation
 
@@ -52,8 +53,7 @@ Article content here...
 ├── manifest.json      # Extension manifest (MV3)
 ├── popup.html         # Popup UI
 ├── popup.css          # Popup styles
-├── popup.js           # Popup logic
-├── content.js         # Content extraction script
+├── popup.js           # Popup logic & content extraction
 ├── lib/
 │   └── turndown.js    # HTML to Markdown converter
 └── icons/             # Extension icons
