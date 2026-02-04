@@ -61,4 +61,4 @@ Article content here...
 
 ## License
 
-MIT
+Public domain (Unlicense). You may use, modify, and distribute this code for any purpose with no conditions. See [LICENSE](LICENSE).
