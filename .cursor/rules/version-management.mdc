@@ -1,0 +1,32 @@
+---
+description: Bump version number in manifest.json when implementing new features
+alwaysApply: true
+---
+
+# Version Management
+
+When implementing new features or making changes to this Chrome extension, update the version number in `manifest.json` following semantic versioning (MAJOR.MINOR.PATCH).
+
+## When to Bump
+
+| Change Type | Version Bump | Examples |
+|-------------|--------------|----------|
+| Breaking changes | MAJOR (X.0.0) | Removing features, changing core behavior incompatibly |
+| New features | MINOR (x.X.0) | Adding new functionality, new options, UI enhancements |
+| Bug fixes, refactors | PATCH (x.x.X) | Fixing bugs, code cleanup, performance improvements |
+
+## Guidelines
+
+- **Always bump** when implementing user-requested features or fixes
+- **Skip bumping** for documentation-only changes or rule file updates
+- **Reset lower numbers** when bumping higher ones (e.g., 1.2.3 → 2.0.0)
+
+## Example
+
+```json
+// Before adding a new feature
+"version": "1.0.0"
+
+// After adding a new feature
+"version": "1.1.0"
+```
