@@ -43,16 +43,16 @@ body {
   color: #264653;
 }
 
-/* Button Row */
-.button-row {
+/* Actions Row */
+.actions-row {
   display: flex;
-  gap: 8px;
-  margin-bottom: 14px;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
 }
 
 .btn {
-  flex: 1;
-  padding: 8px 12px;
+  padding: 8px 16px;
   font-size: 13px;
   font-weight: 500;
   border: none;
@@ -97,10 +97,6 @@ body {
   color: white !important;
 }
 
-/* Options Row */
-.options-row {
-  margin-bottom: 12px;
-}
 
 .checkbox-label {
   display: inline-flex;
@@ -128,7 +124,7 @@ body {
 .preview-container {
   flex: 1;
   min-height: 0;
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .preview-label {

@@ -2,17 +2,16 @@
 let currentMarkdown = null;
 
 // DOM Elements
-const createBtn = document.getElementById('createBtn');
 const copyBtn = document.getElementById('copyBtn');
-const createCopyBtn = document.getElementById('createCopyBtn');
 const includeImagesCheckbox = document.getElementById('includeImages');
 const preview = document.getElementById('preview');
 const status = document.getElementById('status');
 
 // Event Listeners
-createBtn.addEventListener('click', () => createMarkdown(false));
 copyBtn.addEventListener('click', copyMarkdown);
-createCopyBtn.addEventListener('click', () => createMarkdown(true));
+
+// Auto-trigger create when extension opens
+document.addEventListener('DOMContentLoaded', () => createMarkdown());
 
 /**
  * Check if URL is restricted (cannot inject content scripts)
@@ -35,12 +34,9 @@ function isRestrictedUrl(url) {
 }
 
 /**
- * Set button disabled states
+ * Set copy button disabled state
  */
-function setButtonsDisabled(disabled) {
-  createBtn.disabled = disabled;
-  createCopyBtn.disabled = disabled;
-  // Copy button has special handling - only enabled when there's content
+function setCopyDisabled(disabled) {
   copyBtn.disabled = disabled || !currentMarkdown;
 }
 
@@ -79,8 +75,8 @@ function displayLoading() {
 /**
  * Main function to create markdown from current tab
  */
-async function createMarkdown(copyAfter = false) {
-  setButtonsDisabled(true);
+async function createMarkdown() {
+  setCopyDisabled(true);
   setStatus('Processing...', 'loading');
   displayLoading();
   
@@ -131,20 +127,12 @@ async function createMarkdown(copyAfter = false) {
     setStatus('Generated successfully', 'success');
     copyBtn.disabled = false;
     
-    // Copy if requested
-    if (copyAfter) {
-      await copyMarkdown();
-    }
-    
   } catch (error) {
     console.error('Error creating markdown:', error);
     currentMarkdown = null;
     displayError(error.message);
     setStatus(error.message, 'error');
     copyBtn.disabled = true;
-  } finally {
-    createBtn.disabled = false;
-    createCopyBtn.disabled = false;
   }
 }
 
