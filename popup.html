@@ -17,7 +17,7 @@
     <!-- Preview Area -->
     <div class="preview-container">
       <h2 class="preview-label">Preview</h2>
-      <pre id="preview" class="preview">Click "Create markdown" to extract content from the current page.</pre>
+      <pre id="preview" class="preview">Extracting content from the current page…</pre>
     </div>
 
     <!-- Actions Row -->
@@ -33,6 +33,13 @@
         </label>
       </div>
       <div class="btn-group">
+        <button id="regenerateBtn" class="btn btn-tertiary btn-icon-only" title="Regenerate" aria-label="Regenerate">
+          <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="23 4 23 10 17 10"/>
+            <polyline points="1 20 1 14 7 14"/>
+            <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>
+          </svg>
+        </button>
         <button id="downloadBtn" class="btn btn-secondary" disabled>
           <svg class="btn-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
@@ -52,7 +59,7 @@
     </div>
 
     <!-- Status Bar -->
-    <div id="status" class="status"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
   </div>
 
   <script src="popup.js"></script>
