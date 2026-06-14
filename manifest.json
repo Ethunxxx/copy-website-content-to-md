@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Web Content to MD",
-  "version": "1.7.2",
+  "version": "1.8.0",
   "description": "Convert web page content to clean Markdown with metadata",
   "permissions": ["activeTab", "scripting"],
   "action": {

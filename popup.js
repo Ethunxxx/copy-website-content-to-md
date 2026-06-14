@@ -1,11 +1,23 @@
+'use strict';
+
 // State
 let currentMarkdown = null;
 let currentHtml = null;
 let currentTitle = null;
+let isProcessing = false; // guards against overlapping extraction runs
+
+// Files injected into the page before extraction runs. Order matters: Turndown
+// and the cleanup helpers must be defined before the extractor uses them.
+const INJECTED_FILES = [
+  'lib/turndown.js',
+  'lib/markdown-cleanup.js',
+  'content/extractor.js'
+];
 
 // DOM Elements
 const copyBtn = document.getElementById('copyBtn');
 const downloadBtn = document.getElementById('downloadBtn');
+const regenerateBtn = document.getElementById('regenerateBtn');
 const includeImagesCheckbox = document.getElementById('includeImages');
 const includeHtmlCheckbox = document.getElementById('includeHtml');
 const preview = document.getElementById('preview');
@@ -14,8 +26,9 @@ const status = document.getElementById('status');
 // Event Listeners
 copyBtn.addEventListener('click', copyMarkdown);
 downloadBtn.addEventListener('click', downloadMarkdown);
+regenerateBtn.addEventListener('click', createMarkdown);
 includeImagesCheckbox.addEventListener('change', createMarkdown);
-includeHtmlCheckbox.addEventListener('change', updatePreview);
+includeHtmlCheckbox.addEventListener('change', renderPreview);
 
 // Auto-trigger create when extension opens
 document.addEventListener('DOMContentLoaded', () => createMarkdown());
@@ -25,7 +38,7 @@ document.addEventListener('DOMContentLoaded', () => createMarkdown());
  */
 function isRestrictedUrl(url) {
   if (!url) return true;
-  
+
   const restrictedPatterns = [
     /^chrome:\/\//,
     /^chrome-extension:\/\//,
@@ -36,17 +49,23 @@ function isRestrictedUrl(url) {
     /^https:\/\/chrome\.google\.com\/webstore/,
     /^https:\/\/microsoftedge\.microsoft\.com\/addons/
   ];
-  
-  return restrictedPatterns.some(pattern => pattern.test(url));
+
+  return restrictedPatterns.some((pattern) => pattern.test(url));
 }
 
 /**
- * Set action buttons disabled state
+ * Reflect processing/content state in the controls. Copy & Download require
+ * generated content; Regenerate and the options are only locked while a run
+ * is in flight.
  */
-function setActionsDisabled(disabled) {
-  const isDisabled = disabled || !currentMarkdown;
-  copyBtn.disabled = isDisabled;
-  downloadBtn.disabled = isDisabled;
+function updateControls() {
+  const noContent = !currentMarkdown;
+  copyBtn.disabled = isProcessing || noContent;
+  downloadBtn.disabled = isProcessing || noContent;
+  regenerateBtn.disabled = isProcessing;
+  includeImagesCheckbox.disabled = isProcessing;
+  includeHtmlCheckbox.disabled = isProcessing;
+  regenerateBtn.classList.toggle('spinning', isProcessing);
 }
 
 /**
@@ -58,33 +77,19 @@ function setStatus(message, type = '') {
 }
 
 /**
- * Display content in preview area based on current options
+ * Render the preview area from current content + options.
  */
-function displayMarkdown(markdown) {
-  preview.textContent = buildCopyContent() || markdown;
+function renderPreview() {
+  if (!currentMarkdown) return;
+  preview.textContent = buildCopyContent();
   preview.className = 'preview';
 }
 
-/**
- * Update preview when options change (without re-extracting content)
- */
-function updatePreview() {
-  if (currentMarkdown) {
-    preview.textContent = buildCopyContent();
-  }
-}
-
-/**
- * Display error in preview area
- */
 function displayError(message) {
   preview.textContent = `Error: ${message}`;
   preview.className = 'preview error';
 }
 
-/**
- * Display loading state
- */
 function displayLoading() {
   preview.textContent = 'Extracting content...';
   preview.className = 'preview loading';
@@ -94,59 +99,55 @@ function displayLoading() {
  * Main function to create markdown from current tab
  */
 async function createMarkdown() {
-  setActionsDisabled(true);
+  if (isProcessing) return; // ignore overlapping triggers (e.g. rapid toggles)
+  isProcessing = true;
+  updateControls();
   setStatus('Processing...', 'loading');
   displayLoading();
-  
+
   try {
-    // Get active tab
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    
+
     if (!tab) {
       throw new Error('No active tab found');
     }
-    
-    // Check for restricted URLs
+
     if (isRestrictedUrl(tab.url)) {
       throw new Error('Cannot access this page. Chrome system pages, the Web Store, and local files are restricted.');
     }
-    
-    // Get options
+
     const options = {
       includeImages: includeImagesCheckbox.checked
     };
-    
-    // Inject Turndown library first
+
+    // Inject the libraries + extractor (idempotent; survives page reloads)
     await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      files: ['lib/turndown.js']
+      files: INJECTED_FILES
     });
-    
-    // Inject and execute content script with options
+
+    // Run the extractor with the current options
     const results = await chrome.scripting.executeScript({
       target: { tabId: tab.id },
-      func: extractPageContent,
+      func: (opts) => globalThis.__WCM_EXTRACT__(opts),
       args: [options]
     });
-    
+
     const result = results[0]?.result;
-    
+
     if (!result) {
       throw new Error('Failed to extract content - no result returned');
     }
-    
+
     if (!result.success) {
       throw new Error(result.error || 'Content extraction failed');
     }
-    
-    // Success - store markdown and HTML
+
     currentMarkdown = result.markdown;
     currentHtml = result.html;
     currentTitle = result.title;
-    displayMarkdown(currentMarkdown);
+    renderPreview();
     setStatus('Generated successfully', 'success');
-    setActionsDisabled(false);
-    
   } catch (error) {
     console.error('Error creating markdown:', error);
     currentMarkdown = null;
@@ -154,16 +155,18 @@ async function createMarkdown() {
     currentTitle = null;
     displayError(error.message);
     setStatus(error.message, 'error');
-    setActionsDisabled(true);
+  } finally {
+    isProcessing = false;
+    updateControls();
   }
 }
 
 /**
- * Build the content to copy based on options
+ * Build the content to copy/preview based on options
  */
 function buildCopyContent() {
   if (!currentMarkdown) return null;
-  
+
   if (includeHtmlCheckbox.checked && currentHtml) {
     // Include both MD and HTML with start/end flags
     return [
@@ -176,7 +179,7 @@ function buildCopyContent() {
       '<!-- HTML END -->'
     ].join('\n');
   }
-  
+
   return currentMarkdown;
 }
 
@@ -188,21 +191,18 @@ async function copyMarkdown() {
     setStatus('No content to copy', 'error');
     return;
   }
-  
+
   try {
-    const contentToCopy = buildCopyContent();
-    await navigator.clipboard.writeText(contentToCopy);
+    await navigator.clipboard.writeText(buildCopyContent());
     setStatus('Copied to clipboard!', 'success');
-    
-    // Visual feedback on copy button
+
     copyBtn.classList.add('copied');
     copyBtn.querySelector('.btn-text').textContent = 'Copied!';
-    
+
     setTimeout(() => {
       copyBtn.classList.remove('copied');
       copyBtn.querySelector('.btn-text').textContent = 'Copy';
     }, 1500);
-    
   } catch (error) {
     console.error('Error copying to clipboard:', error);
     setStatus('Failed to copy: ' + error.message, 'error');
@@ -215,7 +215,7 @@ async function copyMarkdown() {
 function downloadFile(content, filename, mimeType) {
   const blob = new Blob([content], { type: `${mimeType};charset=utf-8` });
   const url = URL.createObjectURL(blob);
-  
+
   const a = document.createElement('a');
   a.href = url;
   a.download = filename;
@@ -247,14 +247,12 @@ function downloadMarkdown() {
     setStatus('No content to download', 'error');
     return;
   }
-  
+
   try {
     const sanitizedTitle = getSanitizedFilename();
-    
-    // Download markdown file
+
     downloadFile(currentMarkdown, `${sanitizedTitle}.md`, 'text/markdown');
-    
-    // If HTML checkbox is checked and we have HTML, download it too
+
     if (includeHtmlCheckbox.checked && currentHtml) {
       // Small delay to avoid browser blocking multiple downloads
       setTimeout(() => {
@@ -264,688 +262,16 @@ function downloadMarkdown() {
     } else {
       setStatus('Downloaded!', 'success');
     }
-    
-    // Visual feedback on download button
+
     downloadBtn.classList.add('copied');
     downloadBtn.querySelector('.btn-text').textContent = 'Done!';
-    
+
     setTimeout(() => {
       downloadBtn.classList.remove('copied');
       downloadBtn.querySelector('.btn-text').textContent = 'Download';
     }, 1500);
-    
   } catch (error) {
     console.error('Error downloading file:', error);
     setStatus('Failed to download: ' + error.message, 'error');
-  }
-}
-
-/**
- * Content extraction function - injected into the page
- * This function runs in the context of the target page
- */
-function extractPageContent(options) {
-  'use strict';
-  
-  function extractMetadata(title) {
-    const url = window.location.href;
-    const now = new Date();
-    // Format date and time in the user's local timezone. (Mixing toISOString,
-    // which is UTC, with local time produced mismatched values near midnight.)
-    const pad = (n) => String(n).padStart(2, '0');
-    const dateStr =
-      `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
-      ` at ${pad(now.getHours())}:${pad(now.getMinutes())}`;
-    
-    const siteName = 
-      getMetaContent('og:site_name') ||
-      getMetaContent('application-name') ||
-      getMetaContent('publisher') ||
-      window.location.hostname.replace(/^www\./, '');
-    
-    const authorName =
-      getMetaContent('author') ||
-      getMetaContent('article:author') ||
-      getMetaContent('twitter:creator') ||
-      null;
-    
-    const section = 
-      getMetaContent('article:section') ||
-      getMetaContent('category') ||
-      null;
-    
-    return { title, url, dateStr, siteName, authorName, section };
-  }
-  
-  function getMetaContent(name) {
-    const meta = document.querySelector(
-      `meta[name="${name}"], meta[property="${name}"]`
-    );
-    return meta?.content?.trim() || null;
-  }
-  
-  function buildMetadataHeader(meta) {
-    // Use plain text format without blockquotes for better Notion compatibility
-    // Notion treats > as callouts which don't render multi-line content well
-    // Use double newlines to ensure proper line breaks in Notion
-    const lines = [
-      `**Source:** ${meta.url}`,
-      `**Extracted:** ${meta.dateStr}`,
-      `**Site:** ${meta.siteName}`
-    ];
-    
-    if (meta.authorName) {
-      lines.push(`**Author:** ${meta.authorName}`);
-    }
-    if (meta.section) {
-      lines.push(`**Section:** ${meta.section}`);
-    }
-    
-    return lines.join('\n\n') + '\n';
-  }
-  
-  function getMainContent() {
-    // Site-specific selectors (most specific first)
-    const siteSpecificSelectors = {
-      'substack.com': [
-        '.body.markup',           // Substack article body
-        '.post-content',          // Alternative Substack selector
-        'article .body',
-        'article'
-      ],
-      'medium.com': [
-        'article section',
-        'article'
-      ],
-      'linkedin.com': [
-        'main',
-        '.scaffold-layout__main',
-        '.scaffold-layout__content',
-        '.core-rail'
-      ]
-    };
-    
-    // Generic selectors
-    const genericSelectors = [
-      'article',
-      '[role="main"]',
-      'main',
-      '.post-content',
-      '.article-content',
-      '.entry-content',
-      '.content',
-      '#content',
-      '[role="article"]'
-    ];
-    
-    // Check for site-specific selectors first
-    const hostname = window.location.hostname;
-    for (const [site, selectors] of Object.entries(siteSpecificSelectors)) {
-      if (hostname.includes(site)) {
-        for (const selector of selectors) {
-          const element = document.querySelector(selector);
-          if (element && element.textContent.trim().length > 100) {
-            return cleanContentElement(element.cloneNode(true));
-          }
-        }
-      }
-    }
-    
-    const bodyTextLength = document.body.textContent.trim().length;
-    const MIN_CONTENT_RATIO = 0.3;  // Candidate must have at least 30% of body text
-    
-    for (const selector of genericSelectors) {
-      const element = document.querySelector(selector);
-      if (element && element.textContent.trim().length > 100) {
-        const elementTextLength = element.textContent.trim().length;
-        
-        // If candidate has reasonable portion of body content, use it
-        if (elementTextLength >= bodyTextLength * MIN_CONTENT_RATIO) {
-          return cleanContentElement(element.cloneNode(true));
-        }
-        // Otherwise continue checking other selectors
-      }
-    }
-    
-    // Fall back to body if no suitable element found
-    return cleanContentElement(document.body.cloneNode(true));
-  }
-  
-  /**
-   * Remove unwanted elements from content before conversion
-   * Conservative approach: only remove elements we're confident are UI cruft
-   */
-  function cleanContentElement(element) {
-    const hostname = window.location.hostname;
-    
-    // Site-specific selectors - only apply to known sites
-    const siteSpecificRemovals = {
-      'substack.com': [
-        '.subscribe-widget',
-        '.subscription-widget', 
-        '.subscribe-prompt',
-        '.post-ufi',                    // Likes/shares row
-        '.like-button-container',
-        '.share-dialog',
-        '.restack-button',
-        '.frontend-components-notification',
-        '.paywall',
-        '.guest-post-subscribe-section',
-        '.recommendations',
-        '.recommendations-container'
-      ],
-      'medium.com': [
-        '[data-testid="audioPlayButton"]',
-        '[data-testid="headerSocialShareButton"]'
-      ],
-      'linkedin.com': [
-        // Visually hidden elements that cause text duplication
-        '.visually-hidden',
-        '.a11y-text',
-        '#skip-link',
-        '.skip-link',
-        // Interactive elements
-        'button',
-        'input',
-        'textarea',
-        // Navigation and overlays
-        '.artdeco-dropdown',
-        '.artdeco-modal',
-        '.global-nav',
-        // Sidebar
-        '.scaffold-layout__aside',
-        '.scaffold-layout__sidebar',
-        // Profile action buttons
-        '.pvs-header__action',
-        '.pv-top-card-v2-ctas',
-        '.pvs-profile-actions',
-        '.pv-top-card__action-list',
-        // "Show all" / "See more" links
-        '.pvs-list__footer-wrapper',
-        '.pv-profile-section__see-more-inline',
-        '.inline-show-more-text__button',
-        // Activity feed with reposts from others
-        '.scaffold-finite-scroll',
-        // Engagement / social counts
-        '.social-details-social-counts',
-        '.social-details-social-activity',
-        // Messaging overlay
-        '.msg-overlay-list-bubble',
-        '.msg-form',
-        // Premium upsell
-        '.premium-upsell-link',
-        // Presence indicator
-        '.presence-entity',
-        // Skill endorsement details
-        '.pv-skill-endorsement-entity',
-        // Endorsement sub-components within the Skills section only
-        'section:has(#skills) .pvs-entity__sub-components',
-        // Profile photo containers (no useful text)
-        '.pv-top-card__photo',
-        '.profile-background-image',
-        // Connection degree badge ("1st", "2nd", etc.)
-        '.distance-badge',
-        // Image view model containers (become empty bullet points when images are stripped)
-        '.ivm-image-view-model',
-        // Stacked face-pile images (mutual connections, endorsers)
-        'ul.ivm-entity-pile',
-        // Footer
-        '.global-footer'
-      ]
-    };
-    
-    // Apply site-specific removals
-    for (const [site, selectors] of Object.entries(siteSpecificRemovals)) {
-      if (hostname.includes(site)) {
-        for (const selector of selectors) {
-          try {
-            element.querySelectorAll(selector).forEach(el => el.remove());
-          } catch (e) {
-            // Ignore invalid selectors
-          }
-        }
-      }
-    }
-    
-    // Very conservative generic removals - only things that are clearly not content
-    // These use exact class names, not substring matches
-    const safeGenericRemovals = [
-      'nav',
-      '[role="navigation"]'
-    ];
-    
-    for (const selector of safeGenericRemovals) {
-      try {
-        element.querySelectorAll(selector).forEach(el => el.remove());
-      } catch (e) {
-        // Ignore invalid selectors
-      }
-    }
-    
-    return element;
-  }
-  
-  /**
-   * Preprocess HTML to normalize strong/b tags before Turndown conversion
-   * This fixes issues with malformed bold tags that span block elements
-   */
-  function preprocessHtml(html) {
-    const doc = new DOMParser().parseFromString(html, 'text/html');
-    
-    // Find all strong/b elements and normalize them
-    doc.querySelectorAll('strong, b').forEach(el => {
-      // Remove empty or whitespace-only strong tags
-      if (!el.textContent.trim()) {
-        el.replaceWith(...el.childNodes);
-        return;
-      }
-      
-      // If strong contains block elements, unwrap it to prevent broken markdown
-      const hasBlockChild = el.querySelector('p, div, ul, ol, li, br, h1, h2, h3, h4, h5, h6');
-      if (hasBlockChild) {
-        el.replaceWith(...el.childNodes);
-        return;
-      }
-      
-      // Trim whitespace from text nodes at start and end of strong element
-      const firstChild = el.firstChild;
-      const lastChild = el.lastChild;
-      
-      if (firstChild && firstChild.nodeType === Node.TEXT_NODE) {
-        firstChild.textContent = firstChild.textContent.replace(/^\s+/, '');
-      }
-      if (lastChild && lastChild.nodeType === Node.TEXT_NODE) {
-        lastChild.textContent = lastChild.textContent.replace(/\s+$/, '');
-      }
-      
-      // If after trimming, element is empty, remove it
-      if (!el.textContent.trim()) {
-        el.replaceWith(...el.childNodes);
-      }
-    });
-    
-    return doc.body.innerHTML;
-  }
-  
-  function cleanLinkedInMarkdown(markdown) {
-    // Remove entire Activity and Interests sections (not useful in profile extraction)
-    const lines = markdown.split('\n');
-    const result = [];
-    let skipSection = false;
-    const sectionsToRemove = ['Activity', 'Interests'];
-    
-    for (const line of lines) {
-      const headerMatch = line.match(/^## (.+)/);
-      if (headerMatch) {
-        const sectionName = headerMatch[1].trim();
-        skipSection = sectionsToRemove.some(name => sectionName === name || sectionName.startsWith(name));
-      }
-      if (!skipSection) {
-        result.push(line);
-      }
-    }
-    markdown = result.join('\n');
-    
-    markdown = markdown
-      // Remove H1s from content (the profile name duplicates the page title)
-      .replace(/^# .+$/gm, '')
-      
-      // Normalize multi-line link text: collapse internal whitespace in [...](url) blocks.
-      // LinkedIn wraps card content in <a> tags, leaving blank lines inside the link after
-      // images and buttons are stripped. Collapse to a single line.
-      .replace(/\[([\s\S]*?)\]\(([^)]*)\)/g, function(match, text, url) {
-        const clean = text.replace(/\s+/g, ' ').trim();
-        if (!clean) return '';
-        return `[${clean}](${url})`;
-      })
-      
-      // Deduplicate section headers: "## AboutAbout" → "## About"
-      .replace(/^(#{1,6}\s+)(.+?)\2\s*$/gm, '$1$2')
-      
-      // Remove navigation/UI text
-      .replace(/^Skip to (?:search|main content)\s*$/gm, '')
-      .replace(/^Keyboard shortcuts.*$/gm, '')
-      .replace(/^Status is (?:offline|online|reachable|busy|away)\s*$/gm, '')
-      .replace(/^Close jump menu\s*$/gm, '')
-      
-      // Remove profile action menu items
-      .replace(/^-\s*Send profile in a message\s*$/gm, '')
-      .replace(/^-\s*Save to PDF\s*$/gm, '')
-      .replace(/^-\s*Request a recommendation\s*$/gm, '')
-      .replace(/^-\s*Recommend\s*$/gm, '')
-      .replace(/^-\s*Unfollow\s*$/gm, '')
-      .replace(/^-\s*Remove Connection\s*$/gm, '')
-      .replace(/^-\s*Report \/ Block\s*$/gm, '')
-      .replace(/^-\s*About this profile.*$/gm, '')
-      
-      // Remove standalone action words on their own line
-      .replace(/^Message\s*$/gm, '')
-      .replace(/^More\s*$/gm, '')
-      .replace(/^Endorse\s*$/gm, '')
-      .replace(/^Follow\s*$/gm, '')
-      .replace(/^Following\s*$/gm, '')
-      .replace(/^Subscribe\s*$/gm, '')
-      .replace(/^Join\b.*$/gm, '')
-      .replace(/^Comment\s*$/gm, '')
-      .replace(/^Repost\s*$/gm, '')
-      .replace(/^Send\s*$/gm, '')
-      .replace(/^Pending\s*$/gm, '')
-      .replace(/^Connect\s*$/gm, '')
-      
-      // Remove connection degree indicators ("1st", "2nd" standalone)
-      .replace(/^\d+(?:st|nd|rd|th)\s*$/gm, '')
-      .replace(/^\d+(?:st|nd|rd|th) degree connection.*$/gm, '')
-      
-      // Remove "Loaded N Posts posts" type text
-      .replace(/^Loaded \d+ \w+.*$/gm, '')
-      
-      // Remove "Show all N ..." lines (with or without link formatting)
-      .replace(/^\[?Show all \d+.*$/gm, '')
-      
-      // Remove "…see more" / "…more" at end of lines
-      .replace(/\s*…(?:see )?more\s*$/gm, '')
-      
-      // Remove "Recommend [Name]" lines
-      .replace(/^\[?Recommend \w+.*$/gm, '')
-      
-      // Remove empty state text
-      .replace(/^Nothing to see for now.*$/gm, '')
-      .replace(/^Recommendations that .+ will appear here\.?\s*$/gm, '')
-      
-      // Remove "Endorsed by" lines and endorsement counts
-      .replace(/^[ \t]*-?\s*Endorsed by.*$/gm, '')
-      .replace(/^[ \t]*-?\s*\d+ endorsements?.*$/gm, '')
-      
-      // Remove "Other authors" / "Other inventors" lines (handles "- - Other authors" too)
-      .replace(/^[ \t]*(?:-\s*)*Other (?:authors|inventors).*$/gm, '')
-      
-      // Remove "Show publication" / "Show all posts" action links
-      .replace(/\[Show publication\]\([^)]*\)/g, '')
-      .replace(/\[Show all posts\]\([^)]*\)/g, '')
-      
-      // Remove connection degree in recommendations: "· 2nd", "· 3rd"
-      .replace(/·\s*\d+(?:st|nd|rd|th)\b/g, '')
-      
-      // Remove follower/connection count standalone lines
-      .replace(/^\d[\d,]+ (?:followers|members)\s*$/gm, '')
-      .replace(/^\d+\+ connections\s*$/gm, '')
-      
-      // Remove tab navigation text
-      .replace(/^Posts\s+Comments\s+Images\s*$/gm, '')
-      .replace(/^Received\s+Given\s*$/gm, '')
-      .replace(/^Companies\s+Groups\s+Newsletters\s+Schools\s*$/gm, '')
-      
-      // Remove "Contact info" links (keep the surrounding location text on the line)
-      .replace(/\s*\[Contact info\]\([^)]*\)\s*/g, ' ')
-      
-      // Remove "[Name] has verifications" lines
-      .replace(/^\w[\w\s]+ has verifications\s*$/gm, '')
-      
-      // Remove mutual connections search links (span multiple lines)
-      .replace(/\[[\s\S]*?mutual connections[\s\S]*?\]\(https:\/\/www\.linkedin\.com\/search\/results\/people\/[^)]*\)/g, '')
-      
-      // Remove LinkedIn overlay links but keep text
-      .replace(/\[([^\]]*)\]\(\/in\/[^)]*overlay[^)]*\)/g, '$1')
-      
-      // Remove engagement metric lines (likes, comments, reposts as list items)
-      .replace(/^-\s+\d[\d,]*\s*$/gm, '')
-      .replace(/^-\s+-\s+\d+ comments?\s*$/gm, '')
-      .replace(/^-\s+-\s+\d+ reposts?\s*$/gm, '')
-      
-      // Remove "Visible to anyone on or off LinkedIn"
-      .replace(/Visible to anyone on or off LinkedIn/g, '')
-      
-      // Remove LinkedIn hashtag link formatting: [hashtag#word](...) → #word
-      .replace(/\[hashtag(#\w+)\]\([^)]*\)/g, '$1')
-      
-      // Remove "Post" / "Link" type labels in Featured section (indented lone words)
-      .replace(/^[ \t]+Post\s*$/gm, '')
-      .replace(/^[ \t]+Link\s*$/gm, '')
-      .replace(/^[ \t]+Article\s*$/gm, '')
-      .replace(/^[ \t]+Video\s*$/gm, '')
-      
-      // Remove broken endorser URL fragments left by stripped endorsement links
-      // These appear as lines starting with /endorsers?... or just the URL path
-      .replace(/^[ \t]*-?\s*\/endorsers\?[^\n]*$/gm, '')
-      .replace(/^[ \t]*-?\s*\/details\/skills\/[^\n]*$/gm, '')
-      
-      // Remove lines that are only standalone dashes (empty list items from stripped images)
-      .replace(/^([ \t]*-\s*\n){2,}/gm, '')
-      
-      // Remove duplicate paragraph blocks (LinkedIn renders truncated + full versions)
-      .replace(/^(.{80,})\n+\1/gm, '$1')
-      
-      // Clean up excessive newlines
-      .replace(/\n{3,}/g, '\n\n');
-    
-    return markdown;
-  }
-  
-  try {
-    let title = document.title || 'Untitled Page';
-    const hostname = window.location.hostname;
-    
-    // Clean LinkedIn page titles
-    if (hostname.includes('linkedin.com')) {
-      title = title
-        .replace(/^\(\d+\)\s*/, '')
-        .replace(/\s*\|\s*LinkedIn\s*$/, '')
-        .trim();
-    }
-    
-    const contentElement = getMainContent();
-
-    // Strip elements that should never appear in the output. Turndown already
-    // filters these for the Markdown path, but the raw HTML export (the
-    // "Include HTML" option) reads innerHTML directly, so remove them here too
-    // to keep the HTML clean and to honor the "Include images" setting.
-    const htmlRemoveSelectors = ['script', 'style', 'noscript', 'iframe'];
-    if (!options.includeImages) {
-      htmlRemoveSelectors.push('img');
-    }
-    htmlRemoveSelectors.forEach(selector => {
-      contentElement.querySelectorAll(selector).forEach(el => el.remove());
-    });
-
-    const html = preprocessHtml(contentElement.innerHTML);
-    
-    const metadata = extractMetadata(title);
-    
-    const turndownService = new TurndownService({
-      headingStyle: 'atx',
-      hr: '---',
-      bulletListMarker: '-',
-      codeBlockStyle: 'fenced',
-      emDelimiter: '*',
-      strongDelimiter: '**',
-      linkStyle: 'inlined'
-    });
-    
-    // Filter out unwanted elements
-    const filterElements = ['script', 'style', 'noscript', 'iframe', 'nav', 'footer', 'aside', 'header'];
-    
-    // Add img to filter if not including images
-    if (!options.includeImages) {
-      filterElements.push('img');
-    }
-    
-    turndownService.addRule('removeUnwanted', {
-      filter: filterElements,
-      replacement: () => ''
-    });
-    
-    turndownService.addRule('removeHidden', {
-      filter: function(node) {
-        const style = node.style;
-        return style && (style.display === 'none' || style.visibility === 'hidden');
-      },
-      replacement: () => ''
-    });
-    
-    // Remove empty links (links with no text content)
-    // Safe: empty links are never meaningful content
-    turndownService.addRule('removeEmptyLinks', {
-      filter: function(node) {
-        return node.nodeName === 'A' && !node.textContent.trim();
-      },
-      replacement: () => ''
-    });
-    
-    // Custom rule for strong/bold to handle whitespace properly
-    turndownService.addRule('strong', {
-      filter: ['strong', 'b'],
-      replacement: function(content, node, options) {
-        // Trim and normalize whitespace
-        content = content.trim();
-        if (!content) return '';
-        
-        // Don't bold if content is just punctuation or whitespace
-        if (/^[\s.,;:!?\-]+$/.test(content)) return content;
-        
-        return '**' + content + '**';
-      }
-    });
-    
-    // Custom rule for images to handle CDN URLs properly
-    turndownService.addRule('images', {
-      filter: 'img',
-      replacement: function(content, node) {
-        let src = node.getAttribute('src') || '';
-        const alt = node.getAttribute('alt') || '';
-        
-        // Skip if no src or if images are disabled
-        if (!src || !options.includeImages) return '';
-        
-        // Fix Substack CDN URLs - extract the actual image URL
-        // Substack uses format: https://substackcdn.com/image/fetch/...params.../https%3A%2F%2F...
-        const substackMatch = src.match(/substackcdn\.com\/image\/fetch\/[^/]+\/+(https?%3A%2F%2F[^\s]+)/i);
-        if (substackMatch) {
-          try {
-            src = decodeURIComponent(substackMatch[1]);
-          } catch (e) {
-            // If decode fails, try to use as-is
-          }
-        }
-        
-        // Also handle other CDN URL patterns that encode the source URL
-        const encodedUrlMatch = src.match(/\/(https?%3A%2F%2F[^\s?]+)/i);
-        if (!substackMatch && encodedUrlMatch) {
-          try {
-            src = decodeURIComponent(encodedUrlMatch[1]);
-          } catch (e) {
-            // Keep original if decode fails
-          }
-        }
-        
-        // Clean up any remaining URL issues
-        src = src.replace(/\s+/g, '%20');
-        
-        return alt ? `![${alt}](${src})` : `![](${src})`;
-      }
-    });
-    
-    // Use 4-space indentation for nested lists (universal compatibility with Notion, GitHub, etc.)
-    turndownService.addRule('listItem', {
-      filter: 'li',
-      replacement: function(content, node, options) {
-        content = content
-          .replace(/^\n+/, '')
-          .replace(/\n+$/, '\n')
-          .replace(/\n/gm, '\n    '); // 4 spaces for nested content
-        
-        let prefix = options.bulletListMarker + ' ';
-        const parent = node.parentNode;
-        if (parent.nodeName === 'OL') {
-          const start = parent.getAttribute('start');
-          const index = Array.from(parent.children)
-            .filter(el => el.nodeName === 'LI')
-            .indexOf(node);
-          const number = (start ? parseInt(start, 10) : 1) + index;
-          prefix = number + '. ';
-        }
-        
-        return prefix + content + (node.nextSibling && !/\n$/.test(content) ? '\n' : '');
-      }
-    });
-    
-    let markdown = turndownService.turndown(html);
-    
-    // Apply LinkedIn-specific markdown cleanup before generic post-processing
-    if (hostname.includes('linkedin.com')) {
-      markdown = cleanLinkedInMarkdown(markdown);
-    }
-    
-    const header = buildMetadataHeader(metadata);
-    markdown = `# ${metadata.title}\n\n${header}\n---\n\n${markdown}`;
-    
-    markdown = markdown
-      // Remove empty bold markers (including those with just whitespace)
-      .replace(/\*\*\s*\*\*/g, '')
-      // Fix double-double asterisks from adjacent strong tags: **** → single space
-      .replace(/\*\*\*\*/g, ' ')
-      // Remove standalone ** on their own line
-      .replace(/^\*\*\s*$/gm, '');
-
-    // Run-together text fixes. These heuristics (splitting on period+capital,
-    // bold headers after punctuation, concatenated CTA text) are aggressive and
-    // would corrupt ordinary prose on normal pages (e.g. "Node.Js" → "Node.\n\nJs"),
-    // so only apply them to sites known to render content without proper
-    // whitespace between sections.
-    const messySites = ['substack.com', 'medium.com', 'linkedin.com'];
-    if (messySites.some(site => hostname.includes(site))) {
-      markdown = markdown
-        // Add line break before bold section headers that follow periods/links
-        // Pattern: text ending with . or ) followed by **BoldText (likely a section header)
-        .replace(/([.)\]])\s*(\*\*[A-ZÄÖÜ])/g, '$1\n\n$2')
-        // Fix missing space/line break when period is immediately followed by capital letter (no space)
-        // This indicates text running together that should be separate sections
-        .replace(/\.([A-ZÄÖÜ][a-zäöüß])/g, '.\n\n$1')
-        // Remove specific concatenated UI text patterns (exact matches only)
-        .replace(/SubscribeSign in/g, '')
-        .replace(/Sign inSubscribe/g, '');
-    }
-
-    markdown = markdown
-      // Collapse multi-line link text into a single line. Links that wrap
-      // buttons or other block-level elements (common for "Apply"/"View" CTAs)
-      // leave blank lines inside the [...] after their contents are stripped,
-      // which breaks the markdown link. The negative lookbehind keeps image
-      // syntax (![alt](src)) intact.
-      .replace(/(?<!!)\[([\s\S]*?)\]\(([^)]*)\)/g, (match, text, url) => {
-        const clean = text.replace(/\s+/g, ' ').trim();
-        return clean ? `[${clean}](${url})` : '';
-      })
-      
-      // Collapse consecutive duplicate links (e.g. mobile + desktop variants of
-      // the same CTA that render as two identical adjacent links)
-      .replace(/(\[[^\]]+\]\([^)]*\))\1+/g, '$1')
-      
-      // Remove empty link references like [](/path) - these are never content
-      .replace(/\[\s*\]\([^)]*\)/g, '')
-      
-      // Remove duplicate horizontal rules
-      .replace(/(\n---\n)+/g, '\n---\n')
-      
-      // Remove trailing whitespace on lines. Must run before collapsing blank
-      // lines so that whitespace-only lines (e.g. from <br> emitting "  \n")
-      // don't survive the \n{3,} collapse below.
-      .replace(/[ \t]+$/gm, '')
-      // Clean up excessive newlines
-      .replace(/\n{3,}/g, '\n\n')
-      .trim();
-    
-    return { 
-      success: true, 
-      markdown, 
-      html,
-      title: metadata.title,
-      url: metadata.url
-    };
-    
-  } catch (error) {
-    return { 
-      success: false, 
-      error: error.message || 'Unknown error during extraction'
-    };
   }
 }
