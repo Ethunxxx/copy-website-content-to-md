@@ -877,16 +877,32 @@ function extractPageContent(options) {
       .replace(/SubscribeSign in/g, '')
       .replace(/Sign inSubscribe/g, '')
       
+      // Collapse multi-line link text into a single line. Links that wrap
+      // buttons or other block-level elements (common for "Apply"/"View" CTAs)
+      // leave blank lines inside the [...] after their contents are stripped,
+      // which breaks the markdown link. The negative lookbehind keeps image
+      // syntax (![alt](src)) intact.
+      .replace(/(?<!!)\[([\s\S]*?)\]\(([^)]*)\)/g, (match, text, url) => {
+        const clean = text.replace(/\s+/g, ' ').trim();
+        return clean ? `[${clean}](${url})` : '';
+      })
+      
+      // Collapse consecutive duplicate links (e.g. mobile + desktop variants of
+      // the same CTA that render as two identical adjacent links)
+      .replace(/(\[[^\]]+\]\([^)]*\))\1+/g, '$1')
+      
       // Remove empty link references like [](/path) - these are never content
       .replace(/\[\s*\]\([^)]*\)/g, '')
       
       // Remove duplicate horizontal rules
       .replace(/(\n---\n)+/g, '\n---\n')
       
+      // Remove trailing whitespace on lines. Must run before collapsing blank
+      // lines so that whitespace-only lines (e.g. from <br> emitting "  \n")
+      // don't survive the \n{3,} collapse below.
+      .replace(/[ \t]+$/gm, '')
       // Clean up excessive newlines
       .replace(/\n{3,}/g, '\n\n')
-      // Remove trailing whitespace on lines
-      .replace(/[ \t]+$/gm, '')
       .trim();
     
     return { 
