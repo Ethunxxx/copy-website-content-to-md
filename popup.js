@@ -229,12 +229,14 @@ function downloadFile(content, filename, mimeType) {
  * Get sanitized filename base from title
  */
 function getSanitizedFilename() {
-  return (currentTitle || 'content')
+  const sanitized = (currentTitle || 'content')
     .replace(/[<>:"/\\|?*]/g, '-')  // Replace invalid filename chars
     .replace(/\s+/g, '-')           // Replace spaces with hyphens
     .replace(/-+/g, '-')            // Collapse multiple hyphens
-    .replace(/^-|-$/g, '')          // Remove leading/trailing hyphens
-    .substring(0, 100);             // Limit length
+    .substring(0, 100)              // Limit length
+    .replace(/^-|-$/g, '');         // Trim leading/trailing hyphens (after truncation)
+  // Fall back to a default if the title sanitized down to nothing
+  return sanitized || 'content';
 }
 
 /**
@@ -288,8 +290,12 @@ function extractPageContent(options) {
   function extractMetadata(title) {
     const url = window.location.href;
     const now = new Date();
-    const dateStr = now.toISOString().slice(0, 10) + ' at ' + 
-                    now.toTimeString().slice(0, 5);
+    // Format date and time in the user's local timezone. (Mixing toISOString,
+    // which is UTC, with local time produced mismatched values near midnight.)
+    const pad = (n) => String(n).padStart(2, '0');
+    const dateStr =
+      `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` +
+      ` at ${pad(now.getHours())}:${pad(now.getMinutes())}`;
     
     const siteName = 
       getMetaContent('og:site_name') ||
@@ -728,6 +734,19 @@ function extractPageContent(options) {
     }
     
     const contentElement = getMainContent();
+
+    // Strip elements that should never appear in the output. Turndown already
+    // filters these for the Markdown path, but the raw HTML export (the
+    // "Include HTML" option) reads innerHTML directly, so remove them here too
+    // to keep the HTML clean and to honor the "Include images" setting.
+    const htmlRemoveSelectors = ['script', 'style', 'noscript', 'iframe'];
+    if (!options.includeImages) {
+      htmlRemoveSelectors.push('img');
+    }
+    htmlRemoveSelectors.forEach(selector => {
+      contentElement.querySelectorAll(selector).forEach(el => el.remove());
+    });
+
     const html = preprocessHtml(contentElement.innerHTML);
     
     const metadata = extractMetadata(title);
@@ -865,18 +884,28 @@ function extractPageContent(options) {
       // Fix double-double asterisks from adjacent strong tags: **** → single space
       .replace(/\*\*\*\*/g, ' ')
       // Remove standalone ** on their own line
-      .replace(/^\*\*\s*$/gm, '')
-      // Add line break before bold section headers that follow periods/links
-      // Pattern: text ending with . or ) followed by **BoldText (likely a section header)
-      .replace(/([.)\]])\s*(\*\*[A-ZÄÖÜ])/g, '$1\n\n$2')
-      // Fix missing space/line break when period is immediately followed by capital letter (no space)
-      // This indicates text running together that should be separate sections
-      .replace(/\.([A-ZÄÖÜ][a-zäöüß])/g, '.\n\n$1')
-      
-      // Remove specific concatenated UI text patterns (exact matches only)
-      .replace(/SubscribeSign in/g, '')
-      .replace(/Sign inSubscribe/g, '')
-      
+      .replace(/^\*\*\s*$/gm, '');
+
+    // Run-together text fixes. These heuristics (splitting on period+capital,
+    // bold headers after punctuation, concatenated CTA text) are aggressive and
+    // would corrupt ordinary prose on normal pages (e.g. "Node.Js" → "Node.\n\nJs"),
+    // so only apply them to sites known to render content without proper
+    // whitespace between sections.
+    const messySites = ['substack.com', 'medium.com', 'linkedin.com'];
+    if (messySites.some(site => hostname.includes(site))) {
+      markdown = markdown
+        // Add line break before bold section headers that follow periods/links
+        // Pattern: text ending with . or ) followed by **BoldText (likely a section header)
+        .replace(/([.)\]])\s*(\*\*[A-ZÄÖÜ])/g, '$1\n\n$2')
+        // Fix missing space/line break when period is immediately followed by capital letter (no space)
+        // This indicates text running together that should be separate sections
+        .replace(/\.([A-ZÄÖÜ][a-zäöüß])/g, '.\n\n$1')
+        // Remove specific concatenated UI text patterns (exact matches only)
+        .replace(/SubscribeSign in/g, '')
+        .replace(/Sign inSubscribe/g, '');
+    }
+
+    markdown = markdown
       // Collapse multi-line link text into a single line. Links that wrap
       // buttons or other block-level elements (common for "Apply"/"View" CTAs)
       // leave blank lines inside the [...] after their contents are stripped,
