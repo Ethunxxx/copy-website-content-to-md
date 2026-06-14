@@ -72,7 +72,8 @@ Article content here...
 │   ├── turndown.js          # HTML to Markdown converter (vendored)
 │   └── markdown-cleanup.js  # Pure Markdown post-processing + site-handler registry
 ├── test/
-│   └── markdown-cleanup.test.js  # Unit tests for the pure cleanup logic
+│   ├── markdown-cleanup.test.js  # Unit tests for the pure cleanup logic
+│   └── extractor.test.js         # DOM extraction tests (run under jsdom)
 ├── package.json             # Dev scripts (tests / syntax checks)
 └── icons/                   # Extension icons
 ```
